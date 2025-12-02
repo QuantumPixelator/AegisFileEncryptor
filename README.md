@@ -2,6 +2,12 @@
 
 A modern, user-friendly GUI application for encrypting and decrypting files using Fernet symmetric encryption. Built with Python, Tkinter, and ttkthemes for a professional look.
 
+**Repository**: [GitHub - QuantumPixelator/AegisFileEncryptor](https://github.com/QuantumPixelator/AegisFileEncryptor)
+
+## Version
+
+**v1.0** - Initial release with full encryption/decryption functionality, theme support, and GUI.
+
 ## Features
 
 - **Secure Encryption**: AES-128 encryption with HMAC integrity using the `cryptography` library
