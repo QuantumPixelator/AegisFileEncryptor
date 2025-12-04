@@ -162,27 +162,102 @@ class AegisApp(ttkthemes.ThemedTk):
         """
         dialog = tk.Toplevel(self)
         dialog.title("Enter Password")
-        dialog.geometry("300x150")
         dialog.resizable(False, False)
+        dialog.transient(self)  # Make it a transient window of the parent
+        dialog.grab_set()       # Make it modal
 
         # Apply theme to dialog
-        dialog_style = ThemedStyle(dialog)
-        dialog_style.set_theme(self.get_theme())
+        # Get theme colors from main style
+        bg_color = self.style.lookup('TLabel', 'background') or '#ffffff'
+        fg_color = self.style.lookup('TLabel', 'foreground') or '#000000'
 
-        ttk.Label(dialog, text="Password for key derivation:").pack(pady=10)
+        dialog.configure(bg=bg_color)
+
+        tk.Label(dialog, text="Password for key derivation:", bg=bg_color, fg=fg_color).pack(pady=10)
         password_var = tk.StringVar()
-        entry = ttk.Entry(dialog, show="*", textvariable=password_var)
+        entry = tk.Entry(dialog, show="*", textvariable=password_var, bg=bg_color, fg=fg_color, insertbackground=fg_color)
         entry.pack(pady=5)
         entry.focus()
 
-        def submit():
-            dialog.quit()
+        result = None
 
-        ttk.Button(dialog, text="Submit", command=submit).pack(pady=10)
-        dialog.protocol("WM_DELETE_WINDOW", dialog.destroy)
-        dialog.mainloop()
-        dialog.destroy()
-        return password_var.get()
+        def submit():
+            nonlocal result
+            result = password_var.get()
+            dialog.destroy()
+
+        def cancel():
+            nonlocal result
+            result = ""
+            dialog.destroy()
+
+        tk.Button(dialog, text="Submit", command=submit, bg=bg_color, fg=fg_color).pack(pady=10)
+        dialog.protocol("WM_DELETE_WINDOW", cancel)
+        
+        # Bind Enter key to submit
+        dialog.bind('<Return>', lambda e: submit())
+
+        # Center the dialog on the main window after packing
+        dialog.update_idletasks()
+        self.update_idletasks()
+        main_x = self.winfo_x()
+        main_y = self.winfo_y()
+        main_width = self.winfo_width()
+        main_height = self.winfo_height()
+        dialog_width = dialog.winfo_width()
+        dialog_height = dialog.winfo_height()
+        x = main_x + (main_width // 2) - (dialog_width // 2)
+        y = main_y + (main_height // 2) - (dialog_height // 2)
+        dialog.geometry(f"+{x}+{y}")
+        
+        self.wait_window(dialog)  # Wait for dialog to close
+        return result
+
+    def _show_success_dialog(self, message: str):
+        """
+        Displays a themed success dialog.
+
+        Args:
+            message (str): The success message to display.
+        """
+        dialog = tk.Toplevel(self)
+        dialog.title("Success")
+        dialog.resizable(False, False)
+        dialog.transient(self)  # Make it a transient window of the parent
+        dialog.grab_set()       # Make it modal
+
+        # Apply theme to dialog
+        # Get theme colors from main style
+        bg_color = self.style.lookup('TLabel', 'background') or '#ffffff'
+        fg_color = self.style.lookup('TLabel', 'foreground') or '#000000'
+
+        dialog.configure(bg=bg_color)
+
+        tk.Label(dialog, text=message, bg=bg_color, fg=fg_color).pack(pady=20, padx=20)
+
+        def close():
+            dialog.destroy()
+
+        tk.Button(dialog, text="OK", command=close, bg=bg_color, fg=fg_color).pack(pady=10)
+        dialog.protocol("WM_DELETE_WINDOW", close)
+        
+        # Bind Enter key to close
+        dialog.bind('<Return>', lambda e: close())
+
+        # Center the dialog on the main window after packing
+        dialog.update_idletasks()
+        self.update_idletasks()
+        main_x = self.winfo_x()
+        main_y = self.winfo_y()
+        main_width = self.winfo_width()
+        main_height = self.winfo_height()
+        dialog_width = dialog.winfo_width()
+        dialog_height = dialog.winfo_height()
+        x = main_x + (main_width // 2) - (dialog_width // 2)
+        y = main_y + (main_height // 2) - (dialog_height // 2)
+        dialog.geometry(f"+{x}+{y}")
+        
+        self.wait_window(dialog)  # Wait for dialog to close
 
     def _create_widgets(self):
         """
@@ -407,11 +482,19 @@ class AegisApp(ttkthemes.ThemedTk):
             fernet (Fernet): Fernet instance for encryption.
         """
         try:
+            extension = Path(input_path).suffix
+            ext_bytes = extension.encode()
+            ext_len = len(ext_bytes)
+
             file_size = Path(input_path).stat().st_size
             self.operation_queue.put(('max', file_size))
             processed = 0
 
             with open(input_path, "rb") as infile, open(output_path, "wb") as outfile:
+                # Write extension info
+                outfile.write(struct.pack('>I', ext_len))
+                outfile.write(ext_bytes)
+
                 while chunk := infile.read(CHUNK_SIZE):
                     encrypted_chunk = fernet.encrypt(chunk)
                     length = len(encrypted_chunk)
@@ -421,7 +504,7 @@ class AegisApp(ttkthemes.ThemedTk):
                     self.operation_queue.put(('progress', processed))
 
             self.operation_queue.put(('done', f"Encrypted and saved as '{Path(output_path).name}'."))
-            self.operation_queue.put(('reset_encrypt',))
+            self.operation_queue.put(('reset_encrypt', None))
 
         except Exception as e:
             self.operation_queue.put(('error', f"Error during encryption: {e}"))
@@ -434,13 +517,25 @@ class AegisApp(ttkthemes.ThemedTk):
             self._update_status("No encrypted file selected for decryption.", is_error=True)
             return
 
-        # Suggest original filename
+        # Read original extension from encrypted file
+        try:
+            with open(self.decrypt_file, "rb") as f:
+                ext_len_bytes = f.read(4)
+                if len(ext_len_bytes) < 4:
+                    raise ValueError("Invalid encrypted file format")
+                ext_len = struct.unpack('>I', ext_len_bytes)[0]
+                extension = f.read(ext_len).decode()
+        except Exception as e:
+            self._update_status(f"Error reading encrypted file: {e}", is_error=True)
+            return
+
+        # Suggest original filename with extension
         path = Path(self.decrypt_file)
         base_name = path.name
         if base_name.endswith(".enc"):
-            default_name = base_name[:-4]  # Remove .enc
+            default_name = base_name[:-4] + extension  # Remove .enc and add original extension
         else:
-            default_name = base_name + "_decrypted"
+            default_name = base_name + extension
 
         save_path = filedialog.asksaveasfilename(
             title="Save decrypted file as",
@@ -487,6 +582,14 @@ class AegisApp(ttkthemes.ThemedTk):
             processed = 0
 
             with open(input_path, "rb") as infile, open(output_path, "wb") as outfile:
+                # Skip extension info
+                ext_len_bytes = infile.read(4)
+                if len(ext_len_bytes) < 4:
+                    raise ValueError("Invalid encrypted file format")
+                ext_len = struct.unpack('>I', ext_len_bytes)[0]
+                infile.read(ext_len)  # Skip the extension
+                processed += 4 + ext_len
+
                 while True:
                     length_bytes = infile.read(LENGTH_PREFIX_SIZE)
                     if not length_bytes:
@@ -503,10 +606,12 @@ class AegisApp(ttkthemes.ThemedTk):
                     self.operation_queue.put(('progress', processed))
 
             self.operation_queue.put(('done', f"Decrypted and saved as '{Path(output_path).name}'."))
-            self.operation_queue.put(('reset_decrypt',))
+            self.operation_queue.put(('reset_decrypt', None))
 
         except InvalidToken:
             self.operation_queue.put(('error', "Error: Invalid key or corrupted data."))
+            if os.path.exists(output_path):
+                os.remove(output_path)
         except FileNotFoundError:
             self.operation_queue.put(('error', f"Error: File '{input_path}' not found."))
         except Exception as e:
@@ -525,6 +630,7 @@ class AegisApp(ttkthemes.ThemedTk):
                     self.progress["value"] = value
                 elif msg_type == 'done':
                     self._update_status(value)
+                    self._show_success_dialog(value)
                     self._enable_buttons()
                     self.progress["value"] = 0
                 elif msg_type == 'error':
